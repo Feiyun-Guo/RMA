@@ -1,0 +1,348 @@
+###################  R_p 及rMA 的实现 ###################
+
+
+library(quadprog)
+# library(lmridge)
+library(lava)# 包含tr函数，用来计算trace
+library(robustbase)
+library(MASS)
+library(lmridge)
+library(ggplot2)
+#rm(list=ls())
+set.seed(111111)
+n <- 100
+p <- 4  # 自变量个数
+M <- 2^p-1 # 模型个数
+rho <- 0.83666# 相关系数开根号
+beta <- c(1,0,1,0)
+R <- 1000 # 重复次数
+
+
+## 生成2^4-1=15个model
+
+x1 <- c(1,0,0,0,1,1,1,0,0,0,1,1,1,0,1)
+x2 <- c(0,1,0,0,1,0,0,1,1,0,1,1,0,1,1)
+x3 <- c(0,0,1,0,0,1,0,1,0,1,1,0,1,1,1)
+x4 <- c(0,0,0,1,0,0,1,0,1,1,0,1,1,1,1)
+s <- cbind(x1,x2,x3,x4)
+s <- as.matrix(s)
+#Initialize the model formula storage object
+
+mods<-character(M)
+
+#Use a for loop to generate each model formula
+
+for (i in 1:M){
+  mods[i]<- paste("y~",
+                  ifelse(x1[i]==1,"x1",""),
+                  ifelse((x1[i]!=0)&((x2[i]!=0)|(x3[i]!=0)|(x4[i]!=0)),"+",""),
+                  ifelse(x2[i]==1,"x2",""),
+                  ifelse((x2[i]==1)&((x3[i]!=0)|(x4[i]!=0)),"+",""),
+                  ifelse(x3[i]==1,"x3",""),
+                  ifelse((x3[i]==1)&(x4[i]!=0),"+",""),
+                  ifelse(x4[i]==1,"x4",""),sep="")}
+
+# Check contents of mods
+mods
+
+# 定义岭估计函数
+
+casl_lm_ridge <-function(X, y, lambda_vals)
+{
+  svd_obj <- svd(X)
+  U <- svd_obj$u
+  V <- svd_obj$v
+  svals <- svd_obj$d
+  k <- length(lambda_vals)
+  ridge_beta <- matrix(NA_real_, nrow = k, ncol = ncol(X))
+  for (j in seq_len(k))
+  {
+    D <- diag(svals / (svals^2 + lambda_vals[j]))
+    ridge_beta[j,] <- V %*% D %*% t(U) %*% y
+  }
+  t(as.matrix(ridge_beta))
+}
+
+#Use a for loop to generate each model formula
+## Variable counter
+q<-integer(M)
+Tr<- integer(M) # 储存迹trace
+#Residual sum of squares and mean square error
+SSE<-numeric(M)
+#SSE1 <- numeric(15);
+#MSE<-numeric(15)
+SSE.robust <- numeric(M)
+SSE.ridge <- numeric(M)
+
+#R square and adjusted R square
+#Rsq<-numeric(M); A.Rsq<-numeric(M)
+
+#Mallow's statistic and Sp statistic
+cp <- numeric(M); sp <- numeric(M); rp <- numeric(M)
+cp.vec <- numeric(M); sp.vec <- numeric(M); rp.vec <- numeric(M)
+
+#aic<-numeric(15); bic<-numeric(15); P <- numeric(M)
+
+#Get sample size and mean square error for full model
+# n<-dim(guodata1)[1]; 
+## MSE 矩阵R*4
+mse <- matrix(NA,R,6) # cp,sp,rp,MMA,SMA,RMA
+mmaw.matrix <- matrix(NA,R,M); smaw.matrix <- matrix(NA,R,M); 
+rmaw.matrix<- matrix(NA,R,M)
+#AIC and BIC and PRESS
+
+## 开始重复R次模拟
+for(r in 1:R){
+  cat(paste("\nReplication",r,"of",R,sep="")) 
+  
+  
+  #mu <- rep(0,p)
+  #Sigma <- matrix(data=c(1,rho,1-rho,1-rho^2,rho,1,rho,1-rho,
+  # 1-rho,rho,1,rho,1-rho^2,1-rho,rho,1),nrow=p,ncol=p)
+  #X <- MASS::mvrnorm(n, mu, Sigma)
+  Z <- matrix(rnorm(n*5), n, 5)
+  x1 <- sqrt((1-rho^2))*Z[,1]+rho*Z[,5]
+  x2 <- sqrt((1-rho^2))*Z[,2]+rho*Z[,5]
+  x3 <- sqrt((1-rho^2))*Z[,3]+rho*Z[,5]
+  x4 <- sqrt((1-rho^2))*Z[,4]+rho*Z[,5]
+  X <- cbind(x1,x2,x3,x4)
+  dgp <- X%*%beta
+  dgp <- 1+as.vector(dgp)
+  y <- dgp  + rnorm(n,sd=2)
+  guodata1 <- data.frame(x1=X[,1],x2=X[,2],x3=X[,3],x4=X[,4],y=y)
+  X.c<- cbind(rep(1,n),X)
+  
+  #y[1:6] <- seq(30, 55, 5)
+  # y[4] <- 80 # 增加outliers
+  #for (i in 1:6) X[i,] <- c(X[i,1:3],i/2,i/2,i/2) #增加x outliers
+  
+  
+  
+  ### Ordinary full model least square estimation
+  Multiple.mod <- lm(y~x1+x2+x3+x4,data=guodata1)
+  Multiple.sum <- summary(Multiple.mod)
+  beta.ols <- Multiple.sum$coefficients[,1]
+  beta.ols <- as.matrix(beta.ols)
+  s.sq<-Multiple.sum$sigma^2
+  #resid(Multiple.mod)
+  #y-fitted(Multiple.mod)
+  #Multiple.sum$sigma^2
+  ###  Robust full model  MM estimation
+  #Robust.mod <- suppressWarnings(lmrob("y~x1+x2+x3+x4",data=hald,
+  #       control=lmrob.control(maxit.scale=1000,k.max=1000)))
+  
+  #Robust.sum <- summary(Robust.mod)
+  
+  
+  ###  Robust full model Huber M estimation
+  
+  Robust.mod <-rlm(as.formula(mods[M]),data=guodata1)
+  Robust.sum <- summary(Robust.mod)
+  y.full.hat <- fitted(Robust.mod)
+  
+  
+  ### full model ridge estimation and lambda的选取
+  
+  #Ridge.mod <- lmridge(y~., guodata1, K = seq(0, 10, 0.01))
+  
+  #lambda <- kest(Ridge.mod)
+  #lambda_vals <- lambda$HKB
+  lambda_vals <- p*s.sq/(t(beta.ols)%*%beta.ols)
+  lambda_vals <- as.numeric(lambda_vals)
+  beta.full.hat.ridge <- casl_lm_ridge(X.c, y, lambda_vals)  
+  beta.full.hat.ridge 
+  
+  y.full.hat.ridge <- (X.c )%*%beta.full.hat.ridge
+  y.full.hat.ridge
+  ## 验证手动计算全模型残差与系统计算结果形同
+  # r <- resid(Robust.mod) ## 系统计算全模型残差
+  #y-fitted(Robust.mod) ## 手动计算全模型残
+  
+  # mad(resid(Robust.mod))
+  
+  
+  
+  
+  s.sq<-Multiple.sum$sigma^2
+  
+  #residual1.mat <- matrix(NA,n,M) 手动计算残差
+  
+  # 计算mad of full model
+  residual.robust.full <- residuals(Robust.mod)
+  # y-y.full.hat
+  mad.full <- mad(residual.robust.full) 
+  #sum(residual.robust.full^2)
+  #s.sq.robust <- Robust.sum$sigma^2
+  
+  # residual2.mat <- matrix(NA,n,15)
+  
+  
+  # 利用全模型的岭估计估计sigma^2
+  
+  residual.ridge.full <- y-y.full.hat.ridge
+  residual.ridge.full
+  # y-y.full.hat
+  sighat.ridge.full <- (t(residual.ridge.full)
+                        %*% residual.ridge.full)/(n-p-1) 
+  sighat.ridge.full # 利用全模型的岭估计估计sigma^2
+  #sum(residual.robust.full^2)
+  #s.sq.robust <- Robust.sum$sigma^2
+  
+  
+  fitted.mat <- matrix(NA,n,M)
+  residual.mat <- matrix(NA,n,M)
+  
+  fitted.mat.robust <- matrix(NA,n,M)
+  residual.mat.robust <- matrix(NA,n,M)
+  
+  fitted.mat.ridge <- matrix(NA,n,M)
+  residual.mat.ridge <- matrix(NA,n,M)
+  
+  m <- nrow(s)
+  bbeta <- matrix(0,nrow=p+1,ncol=M)
+  q <- rowSums(s)# k=(k_1,...,k_M) 
+  q <- as.matrix(q)
+  
+  #Begin for loop
+  for (i in 1:M){
+    #fit model i and get summary
+    #i=6
+    mod <- lm(mods[i],guodata1)
+    mod.sum <- summary(mod)
+    fitted.mat[,i] <- fitted(mod) # 第i个模型的拟合值
+    residual.mat[,i] <- residuals(mod)
+    #residual1.mat[,i] <- y-fitted.mat[,i] # 手动算残差
+    #residual2.mat[,i] <-residuals(mod) # 系统算残差
+    
+    #fit Robust model i and get summary
+    mod.robust <- rlm(as.formula(mods[i]),data=guodata1)
+    mod.sum.robust  <- summary(mod.robust)
+    fitted.mat.robust[,i] <- fitted(mod.robust) # 第i个模型的拟合值
+    residual.mat.robust[,i] <- y.full.hat-fitted.mat.robust[,i] # 手动算残差
+    
+    #fit Ridge model i 
+    
+    # 首先计算Xm子矩阵
+    ss <- matrix(1,nrow=n,ncol=1) %*% s[i,]
+    indx1 <- which(ss[,]==1)
+    xs <- as.matrix(X[indx1])
+    xs <- matrix(xs,nrow=n,ncol=nrow(xs)/n)
+    xs <- cbind(rep(1,n),xs)
+    
+    # 接下来计算迹trace
+    Hm <- xs %*% solve(t(xs)%*%xs+lambda_vals*diag(q[i]+1))%*%t(xs)
+    Tr[i] <- tr(t(Hm)%*%Hm)
+    s.c <- cbind(rep(1,M),s)
+    if (sum(ss)>0){
+      betas <- casl_lm_ridge(xs, y, lambda_vals) 
+      indx2 <- as.matrix(which(s.c[i,]==1))  
+    }
+    beta0 <- matrix(0,nrow=p+1,ncol=1)
+    beta0[indx2] <- betas     
+    bbeta[,i] <- beta0 
+    # 接下来计算拟合矩阵及残差矩阵
+    #fitted.mat.ridge[,i] <- xs%*%as.matrix(bbeta[,i]) # 第i个模型的拟合值
+    #residual.mat.ridge[,i] <- y.full.hat.ridge-fitted.mat.ridge[,i] # 手动算残差
+    
+    #Get number of variables
+    #q[i]<-as.integer(x1[i]+x2[i]+x3[i]+x4[i])
+    
+    #Get mean square error and residual sum of squares
+    #MSE[i]<-round(mod.sum$sigma^2,2)
+    SSE[i]<-mod.sum$sigma^2*(n-q[i]-1)
+    #SSE1[i] <- sum(residual1.mat[,i]^2) # 手动算残差平方和
+    SSE.robust[i] <- sum(residual.mat.robust[,i]^2) # 手动算残差平方和
+    
+    #Get R square and adjusted R square
+    #Rsq[i]<-round(mod.sum$r.squared,3)
+    #A.Rsq[i]<-round(mod.sum$adj.r.squared,3)
+    
+    #Get Mallow's statistic
+    cp[i]<-round(SSE[i]/s.sq+2*(q[i]+1)-n)
+    
+    #Get S_p statistic
+    sp[i]<-SSE.robust[i]/mad.full^2+2*(q[i]+1)-(q[M]+1)}
+  
+  
+  #Get AIC and BIC
+  #aic[i]<-round(n*log(SSE[i])-n*log(n)+2*(q[i]+1))
+  #bic[i]<-round(n*log(SSE[i])-n*log(n)+log(n)*(q[i]+1))
+  
+  #Get PRESS
+  #r<-residuals(mod); h<-hatvalues(mod)
+  #P[i]<-round(sum((r/(1-h))^2))
+  
+  
+  #Create a data frame
+  #Model.selection<-data.frame(
+  #Put in q, MSE, R squared and adjusted R squared
+  # "q"=q, # "MSE"=MSE, "R.Sq"=Rsq, "A.Rsq"=A.Rsq,
+  #Put in Cp, AIC, BIC and PRESS
+  # "Cp"=cp,"Sp"=sp, #"AIC"=aic, "BIC"=bic, "PRESS"=P,
+  #Assign row names
+  # row.names=mods)
+  
+  #Model.selection
+  fitted.mat.ridge <- X.c %*% bbeta
+  residual.mat.ridge <- y.full.hat.ridge %*% matrix(1,nrow=1,ncol=M) -fitted.mat.ridge
+  # 单独计算rp
+  for(i in 1:M){
+    SSE.ridge[i] <- sum(residual.mat.ridge[,i]^2) # 手动算残差平方和
+    #Get S_p statistic
+    rp[i]<-SSE.ridge[i]/sighat.ridge.full-Tr[M]+Tr[i]+q[i]+1
+  }
+  
+  Amat <- cbind(rep(1,M),diag(1,M,M))
+  bvec <- c(1,rep(0,M))
+  
+  Dmat <- t(residual.mat)%*%residual.mat
+  Dmat.r <- t(residual.mat.robust)%*%residual.mat.robust
+  Dmat.rid <- t(residual.mat.ridge)%*%residual.mat.ridge
+  
+  if(qr(Dmat)$rank<M) Dmat <- Dmat + diag(1e-10,M,M)
+  if(qr(Dmat.r)$rank<M) Dmat.r <- Dmat.r + diag(1e-10,M,M)
+  if(qr(Dmat.rid)$rank<M) Dmat.rid <- Dmat.rid + diag(1e-10,M,M)
+  K <- 1+q
+  Tr <- as.matrix(Tr)
+  sighat.ridge.full <- as.numeric(sighat.ridge.full)
+  #dvec <- -2*sigsq*K # 这里是错的，应该是-sigsq*K
+  dvec <- -s.sq*K
+  dvec.r <- -mad.full*K
+  dvec.rid <- -(0.5)*(sighat.ridge.full)*(Tr+K)
+  
+  w.hat.mma <- solve.QP(Dmat,dvec,Amat,bvec,1)$solution
+  mmaw.matrix[r,] <- round(w.hat.mma,2) 
+  yhat.mma <- fitted.mat%*%w.hat.mma
+  #sum((dgp-yhat.mma)^2)# 值很大 为什么？dgp也没有异常点呀
+  #mse.mma <-  huber(dgp-yhat.mma)$s^2
+  mse.mma <-  mean((dgp-yhat.mma)^2)# 值很小
+  
+  w.hat.mma.r <- solve.QP(Dmat.r,dvec.r,Amat,bvec,1)$solution
+  smaw.matrix[r,] <- round(w.hat.mma.r,2)
+  yhat.mma.r <- fitted.mat.robust%*%w.hat.mma.r
+  #sum((dgp-yhat.mma)^2)# 值很大 为什么？dgp也没有异常点呀
+  #mse.mma.r <- huber(dgp-yhat.mma.r)$s^2
+  mse.mma.r <-mean((dgp-yhat.mma.r)^2)# 值很大
+  
+  w.hat.mma.rid <- solve.QP(Dmat.rid,dvec.rid,Amat,bvec,1)$solution
+  rmaw.matrix[r,] <- round(w.hat.mma.rid,2)
+  
+  yhat.mma.rid <- fitted.mat.ridge%*%w.hat.mma.rid
+  #sum((dgp-yhat.mma)^2)# 值很大 为什么？dgp也没有异常点呀
+  #mse.mma.r <- huber(dgp-yhat.mma.r)$s^2
+  mse.mma.rid <-mean((dgp-yhat.mma.rid)^2)# 值很大
+  
+  #mse.cp <- huber(dgp-fitted.mat[,which.min(cp)])$s^2
+  mse.cp <-  mean((dgp-fitted.mat[,which.min(cp)])^2)#huber(dgp-fitted.mat[,which.min(cp)])$s^2
+  #mse.sp <- huber(dgp-fitted.mat.robust[,which.min(sp)])$s^2
+  mse.sp <-  mean((dgp-fitted.mat.robust[,which.min(sp)])^2)
+  #mse.rp
+  mse.rp <-  mean((dgp-fitted.mat.ridge[,which.min(rp)])^2)
+  mse[r,] <- c(mse.mma.rid,mse.rp,mse.mma,mse.cp,mse.mma.r,mse.sp)
+  
+  cp.vec[r] <- which.min(cp)
+  sp.vec[r] <- which.min(sp)
+  rp.vec[r] <- which.min(rp)
+}
+
+###############################################################
